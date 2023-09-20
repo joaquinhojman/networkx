@@ -17,18 +17,6 @@ __all__ = ["betweenness_centrality", "edge_betweenness_centrality"]
 def betweenness_centrality(
     G, k=None, normalized=True, weight=None, endpoints=False, seed=None, parallel=False
 ):
-    if not parallel:
-        return betweenness_centrality(G, k, normalized, weight, endpoints, seed)
-    else:
-        return parallel_betweenness_centrality(
-            G, k, normalized, weight, endpoints, seed
-        )
-
-
-@py_random_state(5)
-def betweenness_centrality(
-    G, k=None, normalized=True, weight=None, endpoints=False, seed=None
-):
     r"""Compute the shortest-path betweenness centrality for nodes.
 
     Betweenness centrality of a node $v$ is the sum of the
@@ -72,6 +60,10 @@ def betweenness_centrality(
         Indicator of random number generation state.
         See :ref:`Randomness<randomness>`.
         Note that this is only used if k is not None.
+
+    parallel : bool, optional
+        If True, use joblib to run betweenness centrality in parallel.
+        If False or not included, use the traditional method.
 
     Returns
     -------
@@ -133,6 +125,18 @@ def betweenness_centrality(
        Sociometry 40: 35–41, 1977
        https://doi.org/10.2307/3033543
     """
+    if not parallel:
+        return _betweenness_centrality(G, k, normalized, weight, endpoints, seed)
+    else:
+        return _parallel_betweenness_centrality(
+            G, k, normalized, weight, endpoints, seed
+        )
+
+
+@py_random_state(5)
+def _betweenness_centrality(
+    G, k=None, normalized=True, weight=None, endpoints=False, seed=None
+):
     betweenness = dict.fromkeys(G, 0.0)  # b[v]=0 for v in G
     if k is None:
         nodes = G
@@ -164,7 +168,7 @@ def betweenness_centrality(
 
 
 @py_random_state(5)
-def parallel_betweenness_centrality(
+def _parallel_betweenness_centrality(
     G, k=None, normalized=True, weight=None, endpoints=False, seed=None
 ):
     def worker(s):
