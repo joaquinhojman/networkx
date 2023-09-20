@@ -3,6 +3,8 @@ from collections import deque
 from heapq import heappop, heappush
 from itertools import count
 
+from joblib import Parallel, delayed
+
 import networkx as nx
 from networkx.algorithms.shortest_paths.weighted import _weight_function
 from networkx.utils import py_random_state
@@ -11,10 +13,9 @@ from networkx.utils.decorators import not_implemented_for
 __all__ = ["betweenness_centrality", "edge_betweenness_centrality"]
 
 
-@py_random_state(5)
 @nx._dispatch(edge_attrs="weight")
 def betweenness_centrality(
-    G, k=None, normalized=True, weight=None, endpoints=False, seed=None
+    G, k=None, normalized=True, weight=None, endpoints=False, seed=None, parallel=False
 ):
     r"""Compute the shortest-path betweenness centrality for nodes.
 
@@ -59,6 +60,10 @@ def betweenness_centrality(
         Indicator of random number generation state.
         See :ref:`Randomness<randomness>`.
         Note that this is only used if k is not None.
+
+    parallel : bool, optional
+        If True, use joblib to run betweenness centrality in parallel.
+        If False or not included, use the traditional method.
 
     Returns
     -------
@@ -120,11 +125,24 @@ def betweenness_centrality(
        Sociometry 40: 35–41, 1977
        https://doi.org/10.2307/3033543
     """
+    if not parallel:
+        return _betweenness_centrality(G, k, normalized, weight, endpoints, seed)
+    else:
+        return _parallel_betweenness_centrality(
+            G, k, normalized, weight, endpoints, seed
+        )
+
+
+@py_random_state(5)
+def _betweenness_centrality(
+    G, k=None, normalized=True, weight=None, endpoints=False, seed=None
+):
     betweenness = dict.fromkeys(G, 0.0)  # b[v]=0 for v in G
     if k is None:
         nodes = G
     else:
         nodes = seed.sample(list(G.nodes()), k)
+
     for s in nodes:
         # single source shortest paths
         if weight is None:  # use BFS
@@ -136,6 +154,57 @@ def betweenness_centrality(
             betweenness, _ = _accumulate_endpoints(betweenness, S, P, sigma, s)
         else:
             betweenness, _ = _accumulate_basic(betweenness, S, P, sigma, s)
+
+    # rescaling
+    betweenness = _rescale(
+        betweenness,
+        len(G),
+        normalized=normalized,
+        directed=G.is_directed(),
+        k=k,
+        endpoints=endpoints,
+    )
+    return betweenness
+
+
+@py_random_state(5)
+def _parallel_betweenness_centrality(
+    G, k=None, normalized=True, weight=None, endpoints=False, seed=None
+):
+    def worker(s):
+        betweenness_partial = dict.fromkeys(G, 0.0)
+        if weight is None:
+            S, P, sigma, _ = _single_source_shortest_path_basic(G, s)
+        else:
+            S, P, sigma, _ = _single_source_dijkstra_path_basic(G, s, weight)
+
+        if endpoints:
+            betweenness_partial, _ = _accumulate_endpoints(
+                betweenness_partial, S, P, sigma, s
+            )
+        else:
+            betweenness_partial, _ = _accumulate_basic(
+                betweenness_partial, S, P, sigma, s
+            )
+
+        return betweenness_partial
+
+    num_processes = 4  # should be a env variable
+
+    if k is None:
+        nodes = G
+    else:
+        nodes = seed.sample(list(G.nodes()), k)
+
+    betweenness_results = Parallel(n_jobs=num_processes)(
+        delayed(worker)(s) for s in nodes
+    )
+
+    betweenness = {}
+    for result in betweenness_results:
+        for node, value in result.items():
+            betweenness[node] = betweenness.get(node, 0.0) + value
+
     # rescaling
     betweenness = _rescale(
         betweenness,
